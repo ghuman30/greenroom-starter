@@ -125,7 +125,65 @@ export const deals = sqliteTable("deals", {
   bonusesJson: text("bonuses_json"),
   dealNotesFreetext: text("deal_notes_freetext"),
 
+  // -------- Slice 1 additions (deal capture & disambiguation) --------
+  //
+  // Optional paste of the agent's original deal email. When present, the LLM
+  // extractor treats it as the primary source and flags any discrepancies
+  // against `dealNotesFreetext`. When absent, the extractor falls back to
+  // `dealNotesFreetext` alone with a lower confidence rating.
+  agentEmailText: text("agent_email_text"),
+  agentEmailReceivedAt: integer("agent_email_received_at", { mode: "timestamp" }),
+
+  // Full LLM-extracted structured representation. JSON conforming to the
+  // ExtractionOutput type below. Includes ratchets, walkout pots, planned
+  // recoups, per-clause ambiguity scoring, source spans, and confidence.
+  // Populated by lib/extraction.ts; reviewed by Mariana before downstream
+  // consumers (pre-flight, settlement, agent confirmation) use it.
+  extractedDealJson: text("extracted_deal_json"),
+
+  // HITL gates. Two-layer review:
+  //   1. Mariana reviews LLM extraction; marianaConfirmedAt is set on her sign-off.
+  //   2. Agent reviews confirmation link; agentConfirmedAt is set on theirs.
+  // Pre-flight signal (vi) fires when agentConfirmedAt is NULL within X days
+  // of show.
+  marianaConfirmedAt: integer("mariana_confirmed_at", { mode: "timestamp" }),
+  agentConfirmedAt: integer("agent_confirmed_at", { mode: "timestamp" }),
+  confirmedByAgentId: text("confirmed_by_agent_id"),
+
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+// -------- Deal versions (amendment tracking) --------
+
+/**
+ * Every change to a deal (structured or prose) creates a new version row.
+ * The deal-level fields hold the CURRENT version; deal_versions is the
+ * append-only history.
+ *
+ * Default behavior: when a version is created, agentReconfirmRequired = true
+ * and the parent deal's agentConfirmedAt is cleared. The agent must confirm
+ * the new version via the shareable link before downstream consumers use it.
+ *
+ * Memo-flagged open product question: should every amendment require
+ * agent re-confirmation, or only material ones (changes to guarantee,
+ * percentage, caps above $X)? Currently every change requires
+ * re-confirmation; a future config could relax this.
+ */
+export const dealVersions = sqliteTable("deal_versions", {
+  id: text("id").primaryKey(),
+  dealId: text("deal_id")
+    .notNull()
+    .references(() => deals.id),
+  versionNumber: integer("version_number").notNull(),
+  changedAt: integer("changed_at", { mode: "timestamp" }).notNull(),
+  changedByUserId: text("changed_by_user_id").references(() => users.id),
+  changeReason: text("change_reason"),
+  previousValueJson: text("previous_value_json"),
+  newValueJson: text("new_value_json"),
+  agentReconfirmRequired: integer("agent_reconfirm_required", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  agentReconfirmedAt: integer("agent_reconfirmed_at", { mode: "timestamp" }),
 });
 
 // -------- Ticket sales --------
@@ -290,6 +348,7 @@ export type Agent = typeof agents.$inferSelect;
 export type Artist = typeof artists.$inferSelect;
 export type Show = typeof shows.$inferSelect;
 export type Deal = typeof deals.$inferSelect;
+export type DealVersion = typeof dealVersions.$inferSelect;
 export type TicketSale = typeof ticketSales.$inferSelect;
 export type Comp = typeof comps.$inferSelect;
 export type Expense = typeof expenses.$inferSelect;
@@ -333,3 +392,100 @@ export type Recoup = {
 };
 
 export type SettlementStage = Settlement["status"];
+
+// -------- LLM extraction output types (Slice 1) --------
+
+/**
+ * Structured deal representation produced by the LLM extractor.
+ * The full ExtractionOutput is stored as JSON in deals.extractedDealJson.
+ */
+
+export type TierRatchet = {
+  trigger: "attendance_pct" | "gross";
+  from_pct: number;
+  to_pct: number;
+  threshold: number;
+};
+
+export type WalkoutPot = {
+  percent: number;
+  threshold: number;
+  basis: "gross" | "net";
+};
+
+export type PlannedRecoup = {
+  category:
+    | "marketing"
+    | "hospitality_overage"
+    | "production_overage"
+    | "prior_advance"
+    | "damages";
+  amount: number;
+  /** "outside_cap" = comes off gross before % applied. "inside_cap" = counts toward expense cap.
+   *  "unspecified" = source didn't say — needs ambiguity flag. */
+  basis: "gross" | "net" | "outside_cap" | "inside_cap" | "unspecified";
+  description: string;
+};
+
+export type ExtractedDeal = {
+  deal_kind: "flat" | "percentage_of_gross" | "percentage_of_net" | "vs" | "door";
+  guarantee_amount: number | null;
+  percentage: number | null;
+  percentage_basis: "gross" | "net" | null;
+  expense_cap: number | null;
+  hospitality_cap: number | null;
+  bonuses: Bonus[];
+  ratchets: TierRatchet[];
+  walkout_pots: WalkoutPot[];
+  planned_recoups: PlannedRecoup[];
+};
+
+export type AmbiguityFlag = {
+  /** Verbatim quote from the source. */
+  clause: string;
+  source: "email" | "notes";
+  severity: "low" | "medium" | "high";
+  readings: {
+    interpretation: string;
+    implied_payout_change_usd: number | null;
+    implied_payout_change_pct: number | null;
+  }[];
+};
+
+export type Discrepancy = {
+  field: string;
+  email_says: string;
+  notes_says: string;
+  severity: "low" | "medium" | "high";
+};
+
+export type LowConfidenceField = {
+  field: string;
+  reason: string;
+};
+
+/**
+ * Full LLM extraction output. Stored verbatim as JSON in
+ * deals.extractedDealJson. Read by:
+ *   - Mariana's review UI (per-field display + source spans)
+ *   - Agent confirmation surface (plain-English restatement)
+ *   - Pre-flight signals (ambiguity, structure, planned recoups)
+ */
+export type ExtractionOutput = {
+  extracted: ExtractedDeal;
+  source_spans: Record<string, string>;
+  confidence_per_field: Record<string, number>;
+  ambiguity_flags: AmbiguityFlag[];
+  discrepancies: Discrepancy[];
+  low_confidence: LowConfidenceField[];
+  /**
+   * Metadata for the extraction run itself. Optional because:
+   *  - The LLM may or may not include these in its JSON output.
+   *  - lib/extraction.ts fills them in at the boundary if missing.
+   * Callers that need them guaranteed should null-check or read them
+   * from the ExtractionMetadata returned by extractDeal().
+   */
+  model?: string;
+  generated_at?: string;
+  source?: "email" | "notes" | "both";
+};
