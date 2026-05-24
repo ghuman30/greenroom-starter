@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2, Sparkles, Check, RotateCcw } from "lucide-react";
+import { Loader2, Sparkles, Check, RotateCcw, Link2, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   triggerExtraction,
   confirmExtraction,
   resetReview,
   updateEmailText,
+  getAgentLink,
   type ActionResult,
 } from "./actions";
 
@@ -30,6 +31,8 @@ export function DealReviewActions({
   const [error, setError] = useState<string | null>(null);
   const [emailEditOpen, setEmailEditOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState(currentEmailText ?? "");
+  const [agentUrl, setAgentUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const runAction = async (
     action: () => Promise<ActionResult>,
@@ -89,17 +92,48 @@ export function DealReviewActions({
                 Confirm extraction
               </Button>
             ) : (
-              <Button
-                onClick={() =>
-                  runAction(() => resetReview(dealId, showId))
-                }
-                disabled={isPending}
-                variant="secondary"
-                title="Clears both your confirmation and any agent confirmation"
-              >
-                <RotateCcw className="h-4 w-4" />
-                Reset review
-              </Button>
+              <>
+                <Button
+                  onClick={() => {
+                    setError(null);
+                    setCopied(false);
+                    startTransition(async () => {
+                      const result = await getAgentLink(dealId);
+                      if (result.ok) {
+                        setAgentUrl(result.url);
+                        try {
+                          await navigator.clipboard.writeText(result.url);
+                          setCopied(true);
+                        } catch {
+                          /* clipboard blocked; user copies manually */
+                        }
+                      } else {
+                        setError(result.error);
+                      }
+                    });
+                  }}
+                  disabled={isPending}
+                  variant="brand"
+                >
+                  {isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Link2 className="h-4 w-4" />
+                  )}
+                  Get agent link
+                </Button>
+                <Button
+                  onClick={() =>
+                    runAction(() => resetReview(dealId, showId))
+                  }
+                  disabled={isPending}
+                  variant="secondary"
+                  title="Clears both your confirmation and any agent confirmation"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Reset review
+                </Button>
+              </>
             )}
           </>
         )}
@@ -112,6 +146,35 @@ export function DealReviewActions({
           {currentEmailText ? "Edit agent email" : "Add agent email"}
         </button>
       </div>
+
+      {agentUrl && (
+        <div className="rounded-md border border-brand-200 bg-brand-50/50 px-3 py-2.5 flex items-center gap-3">
+          <Link2 className="h-4 w-4 text-brand-700 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[11px] text-brand-800 font-medium mb-0.5">
+              {copied ? "Copied to clipboard — share with the agent" : "Share this link with the agent"}
+            </div>
+            <code className="text-[11.5px] font-mono text-ink-700 break-all">
+              {agentUrl}
+            </code>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(agentUrl);
+                setCopied(true);
+              } catch {
+                /* ignore */
+              }
+            }}
+            className="text-[11px] text-brand-700 hover:text-brand-900 shrink-0 inline-flex items-center gap-1"
+          >
+            <Copy className="h-3 w-3" />
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
 
       {emailEditOpen && (
         <div className="rounded-md border border-ink-200 bg-canvas/40 p-4 space-y-3">

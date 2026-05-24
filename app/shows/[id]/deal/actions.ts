@@ -17,6 +17,7 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { deals } from "@/db/schema";
@@ -26,6 +27,7 @@ import {
   persistExtraction,
   ExtractionError,
 } from "@/lib/extraction";
+import { mintToken, findActiveTokenForDeal } from "@/lib/dealTokens";
 
 export type ActionResult =
   | { ok: true }
@@ -111,6 +113,34 @@ export async function resetReview(
     .where(eq(deals.id, dealId));
   revalidatePath(`/shows/${showId}/deal`);
   return { ok: true };
+}
+
+/**
+ * Get-or-mint the shareable agent confirmation link. Idempotent: returns
+ * the active token if one exists, mints a fresh one otherwise. Returns
+ * the absolute URL so the caller can copy-to-clipboard.
+ */
+export async function getAgentLink(
+  dealId: string,
+): Promise<
+  { ok: true; url: string; minted: boolean } | { ok: false; error: string }
+> {
+  try {
+    const existing = await findActiveTokenForDeal(dealId);
+    const token = existing?.token ?? (await mintToken(dealId));
+    // Derive base URL from the current request — works locally and in
+    // deployed previews. Falls back to APP_BASE_URL env if headers
+    // aren't available (e.g., direct server invocation).
+    const h = await headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    const proto = h.get("x-forwarded-proto") ?? "http";
+    const base = host
+      ? `${proto}://${host}`
+      : process.env.APP_BASE_URL ?? "http://localhost:3000";
+    return { ok: true, url: `${base}/deal/${token}`, minted: !existing };
+  } catch (err) {
+    return { ok: false, error: String(err).slice(0, 200) };
+  }
 }
 
 export async function updateEmailText(

@@ -43,3 +43,18 @@ Non-obvious choices made during the build, with reasoning. So a smart reader who
 - **Demo extractions populated from `notes/eval_results.json`** via `notes/populate_demo_extractions.py`. 11/12 cases written into `deals.extracted_deal_json`. The 12th (Briar Road) was skipped because its last eval run produced a JSON parse error — re-running the eval will populate it.
 - **Empty-extraction state has a "re-extract" affordance** when stored JSON is malformed. Discriminated `LoadedExtraction` from extraction.ts makes this branch typesafe.
 - **Reviewer fixes applied:** type predicate for Bonus filter (proper narrowing), dead `deal` prop removed from `ExtractionView`, fmtRelative moved to module scope, defensive `?? []` on all extracted-array reads, server action uses `parseBonuses` helper instead of raw `JSON.parse` (consistent with `lib/queries.ts` pattern). One conditional issue (useTransition + async with React 18) was N/A since the project uses React 19.2.4.
+
+### T3 (2026-05-23)
+
+- **Token model: stateful, not signed JWT.** Trade-offs: no secret to manage; trivial revocation via `revokedAt`; readable in dev. Tokens are 192-bit URL-safe base64 via `crypto.getRandomValues`. PK lookup; no timing-attack risk at this entropy.
+- **Public agent page, no auth.** Token is the access control. `SidebarWrapper` hides venue internal nav on `/deal/*` so the agent sees just the deal context, not Mariana's chrome.
+- **Per-item AND aggregate confirmation.** `dealAgentResponses` records every per-row action (audit trail); `confirmAll` writes one summary row AND sets `deals.agentConfirmedAt` (which is what pre-flight signal (vi) reads). Confirm-all is idempotent — short-circuits if already confirmed.
+- **`dealAgentResponses.tokenUsed` is for audit, not enforcement.** Revoking a token doesn't delete prior responses; history is the source of truth.
+- **Reviewer P0 fixes applied (all 5):**
+  - `confirmAll` `revalidatePath` was using `dealId` where Next route segment requires `showId` — fixed by joining to fetch showId once.
+  - ID generation switched from `Date.now() + Math.random()` to `crypto.randomUUID()` (no same-ms PK collisions).
+  - `fieldPath` whitelisted against a regex of known values (audit log poisoning prevention).
+  - `confirmAll` short-circuits on already-confirmed (no double-write).
+  - `AmbiguityCard` guards `flag.readings ?? []` and returns null on empty (LLM occasionally omits).
+- **Reviewer P1 fixes applied:** `AmbiguityResolver` state replaced `number | null | -1` overload with explicit discriminated union `{kind: "none" | "index" | "custom"}`; `details` payload typed as `ResponseDetails` discriminated union and sanitized at boundary (clamps custom text to 2000 chars); `getAgentLink` derives base URL from request headers (works on localhost AND deployed previews).
+- **Nice-to-have fixes:** anchored sidebar path matching (`/deal` exact or `/deal/...`, not `/dealings`); `findActiveTokenForDeal` filters in SQL with `and(isNull, gt, eq)` instead of in-memory; documented timing-attack non-risk on `resolveToken`.

@@ -186,6 +186,67 @@ export const dealVersions = sqliteTable("deal_versions", {
   agentReconfirmedAt: integer("agent_reconfirmed_at", { mode: "timestamp" }),
 });
 
+// -------- Deal confirmation tokens (T3) --------
+
+/**
+ * Stateful access tokens for the agent-facing confirmation page at
+ * /deal/[token]. The agent doesn't have a Greenroom account; Mariana
+ * shares the URL out-of-band (email, text). Token grants read access to
+ * the deal + permission to confirm/flag items.
+ *
+ * Why stateful (vs signed JWT): no signing-secret management; trivial
+ * revocation by setting revokedAt; easy to inspect in dev for debugging.
+ */
+export const dealConfirmationTokens = sqliteTable("deal_confirmation_tokens", {
+  token: text("token").primaryKey(),
+  dealId: text("deal_id")
+    .notNull()
+    .references(() => deals.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  // Optional descriptive label so Mariana sees "Confirmed by Daniel via
+  // link 'WME-Mar-14'" rather than a random string.
+  label: text("label"),
+});
+
+// -------- Deal agent responses (T3) --------
+
+/**
+ * Per-item agent actions on the confirmation page. One row per
+ * confirm/flag/reading-choice event.
+ *
+ * fieldPath identifies what was acted on:
+ *   "guarantee_amount", "percentage", "expense_cap", "hospitality_cap"
+ *   "bonus_<index>", "ratchet_<index>", "walkout_pot_<index>"
+ *   "ambiguity_<index>", "discrepancy_<index>"
+ *   "all" — single "confirm everything" action covers the happy path
+ *
+ * action: what the agent did
+ *   "confirmed"    - looks right, agent agrees with our reading
+ *   "flagged"      - looks wrong, see details_json for their note
+ *   "reading_chosen" - for ambiguity flags, picked one of the readings;
+ *                      reading_index in details_json
+ *
+ * details_json: structured payload, optional. Examples:
+ *   { reading_index: 0 }
+ *   { custom_reading: "Actually neither — see explanation" }
+ *   { comment: "I never agreed to a $500 hosp cap" }
+ */
+export const dealAgentResponses = sqliteTable("deal_agent_responses", {
+  id: text("id").primaryKey(),
+  dealId: text("deal_id")
+    .notNull()
+    .references(() => deals.id),
+  tokenUsed: text("token_used"), // for audit; not enforced FK
+  fieldPath: text("field_path").notNull(),
+  action: text("action", {
+    enum: ["confirmed", "flagged", "reading_chosen"],
+  }).notNull(),
+  detailsJson: text("details_json"),
+  respondedAt: integer("responded_at", { mode: "timestamp" }).notNull(),
+});
+
 // -------- Ticket sales --------
 
 export const ticketSales = sqliteTable("ticket_sales", {
@@ -349,6 +410,8 @@ export type Artist = typeof artists.$inferSelect;
 export type Show = typeof shows.$inferSelect;
 export type Deal = typeof deals.$inferSelect;
 export type DealVersion = typeof dealVersions.$inferSelect;
+export type DealConfirmationToken = typeof dealConfirmationTokens.$inferSelect;
+export type DealAgentResponse = typeof dealAgentResponses.$inferSelect;
 export type TicketSale = typeof ticketSales.$inferSelect;
 export type Comp = typeof comps.$inferSelect;
 export type Expense = typeof expenses.$inferSelect;

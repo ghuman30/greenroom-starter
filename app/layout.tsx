@@ -3,7 +3,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Fraunces } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "@/components/layout/sidebar";
+import { SidebarWrapper } from "@/components/layout/sidebar-wrapper";
 import { CommandPaletteData } from "@/components/command-palette/command-data";
 
 const fraunces = Fraunces({
@@ -69,7 +69,7 @@ export default function RootLayout({
       className={`${GeistSans.variable} ${GeistMono.variable} ${fraunces.variable} h-full antialiased`}
     >
       <body className="min-h-full flex font-sans">
-        <Sidebar />
+        <SidebarWrapper />
         <main className="flex-1 overflow-auto relative">{children}</main>
         <CommandPaletteData />
       </body>
