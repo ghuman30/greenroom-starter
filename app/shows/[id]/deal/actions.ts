@@ -18,9 +18,13 @@
 
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { deals } from "@/db/schema";
+import {
+  deals,
+  dealAgentResponses,
+  dealConfirmationTokens,
+} from "@/db/schema";
 import { parseBonuses } from "@/lib/dealMath";
 import {
   extractDeal,
@@ -99,14 +103,42 @@ export async function confirmExtraction(
 }
 
 /**
- * Reset BOTH Mariana's and the agent's confirmation. Used when Mariana
- * wants to re-review (any change she makes invalidates the agent's prior
- * signoff, since the agent confirmed a specific structured deal).
+ * Reset the entire review loop for a deal. Mariana clicks this when she
+ * wants to revise the extraction — any prior agent feedback is about an
+ * older state of the deal and shouldn't carry forward.
+ *
+ * Atomic clear of all three sources of prior-review state:
+ *   1. `dealAgentResponses` rows — old per-item confirmations/flags
+ *      would otherwise show up on the next agent's view AND on
+ *      Mariana's AgentResponseSection, even though they're stale.
+ *   2. Active `dealConfirmationTokens` — any link Mariana previously
+ *      shared still works otherwise, and the agent would land on a
+ *      page pre-rendered with their old responses. Revoking forces a
+ *      fresh link share after Mariana re-confirms.
+ *   3. `marianaConfirmedAt` + `agentConfirmedAt` timestamps — the
+ *      whole HITL state machine resets.
+ *
+ * This is the "I'm starting this loop over" gesture.
  */
 export async function resetReview(
   dealId: string,
   showId: string,
 ): Promise<ActionResult> {
+  const now = new Date();
+  // Delete per-item responses for THIS deal only.
+  await db.delete(dealAgentResponses).where(eq(dealAgentResponses.dealId, dealId));
+  // Revoke any currently-active tokens — sets revokedAt, doesn't delete.
+  // The token URL becomes invalid; resolveToken returns reason='revoked'.
+  await db
+    .update(dealConfirmationTokens)
+    .set({ revokedAt: now })
+    .where(
+      and(
+        eq(dealConfirmationTokens.dealId, dealId),
+        isNull(dealConfirmationTokens.revokedAt),
+      ),
+    );
+  // Clear both confirmation timestamps.
   await db
     .update(deals)
     .set({ marianaConfirmedAt: null, agentConfirmedAt: null })

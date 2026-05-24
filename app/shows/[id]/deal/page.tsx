@@ -105,13 +105,28 @@ export default async function DealReviewPage({
     .from(dealAgentResponses)
     .where(eq(dealAgentResponses.dealId, deal.id))
     .orderBy(desc(dealAgentResponses.respondedAt));
-  const flaggedResponses = agentResponses.filter((r) => r.action === "flagged");
-  const readingChoices = agentResponses.filter(
+  // fieldPath != 'all' excludes the aggregate "submitted" row.
+  const perItemResponses = agentResponses.filter((r) => r.fieldPath !== "all");
+  const flaggedResponses = perItemResponses.filter((r) => r.action === "flagged");
+  const readingChoices = perItemResponses.filter(
     (r) => r.action === "reading_chosen",
   );
-  const confirmedItemsCount = agentResponses.filter(
-    (r) => r.action === "confirmed" && r.fieldPath !== "all",
+  const confirmedItemsCount = perItemResponses.filter(
+    (r) => r.action === "confirmed",
   ).length;
+  // Three distinct agent states:
+  //   - not started:    no responses at all
+  //   - reviewed_flags: aggregate row exists with action='flagged' (agent
+  //                     submitted but with objections; agentConfirmedAt
+  //                     is null in this case per the action contract)
+  //   - confirmed:      deal.agentConfirmedAt is set (no flags)
+  const aggregateRow = agentResponses.find((r) => r.fieldPath === "all");
+  const agentReviewState: "none" | "reviewed_flags" | "confirmed" =
+    deal.agentConfirmedAt
+      ? "confirmed"
+      : aggregateRow?.action === "flagged"
+        ? "reviewed_flags"
+        : "none";
 
   return (
     <div className="px-12 py-10 max-w-7xl">
@@ -147,7 +162,9 @@ export default async function DealReviewPage({
       <StatusRow
         hasExtraction={!!extraction}
         marianaConfirmedAt={deal.marianaConfirmedAt}
-        agentConfirmedAt={deal.agentConfirmedAt}
+        agentReviewState={agentReviewState}
+        agentSubmittedAt={aggregateRow?.respondedAt ?? deal.agentConfirmedAt ?? null}
+        flaggedCount={flaggedResponses.length}
         extractionModel={extraction?.model}
         extractionGeneratedAt={extraction?.generated_at}
       />
@@ -391,20 +408,47 @@ function extractDetail(json: string | null, key: string): string | null {
 function StatusRow({
   hasExtraction,
   marianaConfirmedAt,
-  agentConfirmedAt,
+  agentReviewState,
+  agentSubmittedAt,
+  flaggedCount,
   extractionModel,
   extractionGeneratedAt,
 }: {
   hasExtraction: boolean;
   marianaConfirmedAt: Date | null;
-  agentConfirmedAt: Date | null;
+  agentReviewState: "none" | "reviewed_flags" | "confirmed";
+  agentSubmittedAt: Date | null;
+  flaggedCount: number;
   extractionModel?: string;
   extractionGeneratedAt?: string;
 }) {
+  // Three-state model for the agent dot:
+  //   confirmed       → green/brand,  "Agent confirmed"
+  //   reviewed_flags  → amber,        "Agent reviewed · N flags" (NOT confirmed)
+  //   none            → gray,         "Not sent yet" / "Awaiting agent"
+  const agentTone =
+    agentReviewState === "confirmed"
+      ? "brand"
+      : agentReviewState === "reviewed_flags"
+        ? "amber"
+        : "neutral";
+  const agentLabel =
+    agentReviewState === "confirmed"
+      ? "Agent confirmed"
+      : agentReviewState === "reviewed_flags"
+        ? `Agent reviewed · ${flaggedCount} flag${flaggedCount === 1 ? "" : "s"}`
+        : "Agent confirmation";
+  const agentDetail =
+    agentReviewState === "confirmed"
+      ? fmtRelative(agentSubmittedAt)
+      : agentReviewState === "reviewed_flags"
+        ? `submitted ${fmtRelative(agentSubmittedAt)} · needs your action`
+        : "Not sent yet";
+
   return (
     <div className="flex items-center gap-6 pt-4 pb-6 border-y border-ink-100 mb-8">
       <StatusDot
-        active={hasExtraction}
+        tone={hasExtraction ? "brand" : "neutral"}
         label="Extracted"
         detail={
           hasExtraction
@@ -413,35 +457,33 @@ function StatusRow({
         }
       />
       <StatusDot
-        active={!!marianaConfirmedAt}
+        tone={marianaConfirmedAt ? "brand" : "neutral"}
         label="Mariana confirmed"
         detail={marianaConfirmedAt ? fmtRelative(marianaConfirmedAt) : "Pending review"}
       />
-      <StatusDot
-        active={!!agentConfirmedAt}
-        label="Agent confirmed"
-        detail={agentConfirmedAt ? fmtRelative(agentConfirmedAt) : "Not sent yet"}
-      />
+      <StatusDot tone={agentTone} label={agentLabel} detail={agentDetail} />
     </div>
   );
 }
 
 function StatusDot({
-  active,
+  tone,
   label,
   detail,
 }: {
-  active: boolean;
+  tone: "brand" | "amber" | "neutral";
   label: string;
   detail: string;
 }) {
+  const dotColor =
+    tone === "brand"
+      ? "bg-brand-700"
+      : tone === "amber"
+        ? "bg-amber-500"
+        : "bg-ink-300";
   return (
     <div className="flex items-center gap-2.5">
-      <div
-        className={`w-2 h-2 rounded-full ${
-          active ? "bg-brand-700" : "bg-ink-300"
-        }`}
-      />
+      <div className={`w-2 h-2 rounded-full ${dotColor}`} />
       <div>
         <div className="text-[12.5px] font-medium text-ink-900">{label}</div>
         <div className="text-[11px] text-ink-500 font-mono tabular">{detail}</div>

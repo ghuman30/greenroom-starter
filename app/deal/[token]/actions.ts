@@ -93,49 +93,81 @@ export async function recordResponse(
 }
 
 /**
- * Single "confirm everything" action. Records one `resp_*_all` row plus
- * sets deals.agentConfirmedAt. Short-circuits if already confirmed (so
- * accidental double-clicks don't pollute the audit log).
+ * Submit the agent's review. Two distinct outcomes:
+ *
+ *   1. NO flagged items → "fully confirmed" — sets agentConfirmedAt,
+ *      pre-flight signal (vi) stops firing, deal is considered agreed.
+ *
+ *   2. ANY flagged items → "reviewed with flags" — does NOT set
+ *      agentConfirmedAt. The agent reviewed, but raised objections.
+ *      Pre-flight keeps firing signal (vi) so Mariana knows the deal
+ *      isn't yet agreed. The flagged items are visible to Mariana via
+ *      the AgentResponseSection on her review page.
+ *
+ * Idempotent: short-circuits if a "submitted" summary row already
+ * exists. The summary row's `action` field encodes the outcome
+ * ('confirmed' for clean, 'flagged' for reviewed-with-flags).
  */
 export async function confirmAll(token: string): Promise<AgentActionResult> {
   const t = await resolveToken(token);
   if (!t.ok) return { ok: false, error: `Link is ${t.reason}` };
 
-  // Look up the deal once: we need showId for revalidation AND we need
-  // to check existing agentConfirmedAt before re-confirming.
   const [deal] = await db
-    .select({ id: deals.id, showId: deals.showId, agentConfirmedAt: deals.agentConfirmedAt })
+    .select({
+      id: deals.id,
+      showId: deals.showId,
+      agentConfirmedAt: deals.agentConfirmedAt,
+    })
     .from(deals)
     .where(eq(deals.id, t.token.dealId))
     .limit(1);
 
   if (!deal) return { ok: false, error: "Deal not found" };
 
-  if (deal.agentConfirmedAt) {
-    // Idempotent: already confirmed; don't double-write.
+  // Count actual flags from per-item responses for THIS deal.
+  // `fieldPath != 'all'` excludes the aggregate row itself.
+  const responses = await db
+    .select({
+      action: dealAgentResponses.action,
+      fieldPath: dealAgentResponses.fieldPath,
+    })
+    .from(dealAgentResponses)
+    .where(eq(dealAgentResponses.dealId, deal.id));
+
+  const flaggedCount = responses.filter(
+    (r) => r.action === "flagged" && r.fieldPath !== "all",
+  ).length;
+
+  const alreadySubmitted = responses.some((r) => r.fieldPath === "all");
+  if (alreadySubmitted) {
+    // Idempotent: already submitted. Don't double-write.
     return { ok: true };
   }
 
   const now = new Date();
+
+  // Aggregate row encodes outcome in `action`.
   await db.insert(dealAgentResponses).values({
     id: randomUUID(),
     dealId: deal.id,
     tokenUsed: token,
     fieldPath: "all",
-    action: "confirmed",
-    detailsJson: null,
+    action: flaggedCount > 0 ? "flagged" : "confirmed",
+    detailsJson: flaggedCount > 0 ? JSON.stringify({ flagged_count: flaggedCount }) : null,
     respondedAt: now,
   });
 
-  await db
-    .update(deals)
-    .set({ agentConfirmedAt: now })
-    .where(eq(deals.id, deal.id));
+  // Only set agentConfirmedAt if the agent actually agreed to everything.
+  // Otherwise the deal is "reviewed but not confirmed" — pre-flight
+  // signal (vi) keeps firing.
+  if (flaggedCount === 0) {
+    await db
+      .update(deals)
+      .set({ agentConfirmedAt: now })
+      .where(eq(deals.id, deal.id));
+  }
 
   revalidatePath(`/deal/${token}`);
-  // Mariana's UI lives at /shows/{showId}/deal — NOT /shows/{dealId}/deal.
-  // Look up showId from the deal row above (revalidation needs the route's
-  // dynamic segment, which is the show id).
   revalidatePath(`/shows/${deal.showId}/deal`);
   return { ok: true };
 }
