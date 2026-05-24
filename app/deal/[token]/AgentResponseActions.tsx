@@ -265,36 +265,63 @@ export function AmbiguityResolver({
 interface ConfirmAllProps {
   token: string;
   alreadyConfirmed: boolean;
+  /** Per-item action counts read server-side from dealAgentResponses. */
+  responseSummary: {
+    confirmed: number;
+    flagged: number;
+  };
 }
 
 export function ConfirmAllButton({
   token,
   alreadyConfirmed,
+  responseSummary,
 }: ConfirmAllProps) {
   const [isPending, startTransition] = useTransition();
   const [done, setDone] = useState(alreadyConfirmed);
   const [error, setError] = useState<string | null>(null);
 
+  const hasFlags = responseSummary.flagged > 0;
+
+  // Already-submitted state — reflects what was actually sent.
   if (done) {
     return (
-      <div className="rounded-lg bg-brand-50 border border-brand-200 px-5 py-4 flex items-center gap-3 text-brand-900">
-        <Check className="h-5 w-5 text-brand-700 shrink-0" />
+      <div
+        className={
+          hasFlags
+            ? "rounded-lg bg-amber-50 border border-amber-200 px-5 py-4 flex items-center gap-3 text-amber-900"
+            : "rounded-lg bg-brand-50 border border-brand-200 px-5 py-4 flex items-center gap-3 text-brand-900"
+        }
+      >
+        <Check className={`h-5 w-5 shrink-0 ${hasFlags ? "text-amber-700" : "text-brand-700"}`} />
         <div>
           <div className="font-semibold text-[13px]">
-            Thanks — Mariana is notified.
+            {hasFlags
+              ? `Sent to Mariana — ${responseSummary.flagged} item${responseSummary.flagged === 1 ? "" : "s"} flagged for her review.`
+              : "Sent to Mariana — everything confirmed."}
           </div>
-          <div className="text-[11.5px] text-brand-800/80 mt-0.5">
-            You confirmed this deal. The Crescent will use these terms at settlement.
+          <div className="text-[11.5px] mt-0.5 opacity-80">
+            {hasFlags
+              ? "Mariana will revise the deal and re-share for confirmation."
+              : "The Crescent will use these terms at settlement."}
           </div>
         </div>
       </div>
     );
   }
 
+  // Build the call-to-action copy honestly from the per-item state.
+  const reviewedCount = responseSummary.confirmed + responseSummary.flagged;
+  const buttonLabel = hasFlags
+    ? `Send my review (${responseSummary.confirmed} confirmed, ${responseSummary.flagged} flagged)`
+    : reviewedCount > 0
+      ? `Confirm the rest (${responseSummary.confirmed} already confirmed)`
+      : "Confirm — everything looks right";
+
   return (
     <div className="space-y-2">
       <Button
-        variant="brand"
+        variant={hasFlags ? "secondary" : "brand"}
         size="lg"
         className="w-full sm:w-auto"
         disabled={isPending}
@@ -312,8 +339,16 @@ export function ConfirmAllButton({
         ) : (
           <Check className="h-4 w-4" />
         )}
-        {isPending ? "Sending…" : "Confirm — everything looks right"}
+        {isPending ? "Sending…" : buttonLabel}
       </Button>
+      {hasFlags && (
+        <p className="text-[11.5px] text-amber-800 leading-relaxed max-w-prose">
+          You&apos;ve flagged {responseSummary.flagged} item
+          {responseSummary.flagged === 1 ? "" : "s"} — submitting will send
+          both your confirmations and your flags to Mariana. She&apos;ll
+          revise the deal and re-share for re-confirmation.
+        </p>
+      )}
       {error && (
         <div className="text-[12px] text-rose-700">{error}</div>
       )}

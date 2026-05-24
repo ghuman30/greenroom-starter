@@ -1,8 +1,16 @@
 import { notFound } from "next/navigation";
 import { AlertTriangle, FileText, Mail } from "lucide-react";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
-import { deals, shows, artists, agencies, agents, venues } from "@/db/schema";
+import {
+  deals,
+  shows,
+  artists,
+  agencies,
+  agents,
+  venues,
+  dealAgentResponses,
+} from "@/db/schema";
 import { resolveToken } from "@/lib/dealTokens";
 import { getExtraction } from "@/lib/extraction";
 import { formatMoney, formatShowDateFull } from "@/lib/format";
@@ -72,6 +80,28 @@ export default async function AgentDealPage({
   const extractionResult = getExtraction(deal);
   const extraction = extractionResult.ok ? extractionResult.output : null;
 
+  // Fetch this agent's prior per-item responses so we can:
+  //   1. Mark already-confirmed / already-flagged items in the UI
+  //   2. Adapt the "Confirm all" button copy to honest state
+  //      (don't say "everything looks right" if they've flagged things)
+  const priorResponses = await db
+    .select()
+    .from(dealAgentResponses)
+    .where(eq(dealAgentResponses.dealId, deal.id));
+  const responseByField = new Map<string, "confirmed" | "flagged">();
+  let confirmedCount = 0;
+  let flaggedCount = 0;
+  for (const r of priorResponses) {
+    if (r.fieldPath === "all") continue; // skip the aggregate row
+    if (r.action === "confirmed") {
+      responseByField.set(r.fieldPath, "confirmed");
+      confirmedCount++;
+    } else if (r.action === "flagged") {
+      responseByField.set(r.fieldPath, "flagged");
+      flaggedCount++;
+    }
+  }
+
   const venueName = venue?.name ?? "The Crescent";
   const greeting = agent?.name ? `Hi ${agent.name.split(" ")[0]}` : "Hi there";
 
@@ -119,6 +149,8 @@ export default async function AgentDealPage({
             token={token}
             agentEmailPresent={!!deal.agentEmailText}
             alreadyConfirmed={!!deal.agentConfirmedAt}
+            responseSummary={{ confirmed: confirmedCount, flagged: flaggedCount }}
+            responseByField={responseByField}
           />
         )}
       </main>
@@ -136,12 +168,15 @@ function AgentReviewContent({
   token,
   agentEmailPresent,
   alreadyConfirmed,
+  responseSummary,
 }: {
   deal: Deal;
   extraction: ExtractionOutput;
   token: string;
   agentEmailPresent: boolean;
   alreadyConfirmed: boolean;
+  responseSummary: { confirmed: number; flagged: number };
+  responseByField: Map<string, "confirmed" | "flagged">;
 }) {
   const { extracted } = extraction;
   const bonuses = (extracted.bonuses ?? []).filter(isPayableBonus);
@@ -315,10 +350,15 @@ function AgentReviewContent({
 
       {/* Confirm all */}
       <div className="pt-4 border-t border-ink-100">
-        <ConfirmAllButton token={token} alreadyConfirmed={alreadyConfirmed} />
+        <ConfirmAllButton
+          token={token}
+          alreadyConfirmed={alreadyConfirmed}
+          responseSummary={responseSummary}
+        />
         <p className="text-[11.5px] text-ink-400 mt-2">
-          Confirming sends a notification to Mariana that you&apos;ve reviewed
-          the deal. You can still flag individual items above.
+          Submitting sends a notification to Mariana with your confirmations
+          and flags. You can still flag or unflag individual items above
+          before sending.
         </p>
       </div>
     </div>

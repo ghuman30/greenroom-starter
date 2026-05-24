@@ -4,12 +4,16 @@ import {
   ArrowLeft,
   AlertTriangle,
   AlertCircle,
+  Check,
   Clock,
   FileText,
   Mail,
   Sparkles,
   Info,
 } from "lucide-react";
+import { eq, desc } from "drizzle-orm";
+import { db } from "@/db";
+import { dealAgentResponses } from "@/db/schema";
 import { getShowById } from "@/lib/queries";
 import {
   Card,
@@ -93,6 +97,22 @@ export default async function DealReviewPage({
   const extraction: ExtractionOutput | null =
     extractionResult.ok ? extractionResult.output : null;
 
+  // Agent's per-item responses (confirmations + flags). Surfaced as a
+  // dedicated section so Mariana sees flagged items without digging into
+  // the DB. Closes the L1<->L3 HITL loop the slice promised.
+  const agentResponses = await db
+    .select()
+    .from(dealAgentResponses)
+    .where(eq(dealAgentResponses.dealId, deal.id))
+    .orderBy(desc(dealAgentResponses.respondedAt));
+  const flaggedResponses = agentResponses.filter((r) => r.action === "flagged");
+  const readingChoices = agentResponses.filter(
+    (r) => r.action === "reading_chosen",
+  );
+  const confirmedItemsCount = agentResponses.filter(
+    (r) => r.action === "confirmed" && r.fieldPath !== "all",
+  ).length;
+
   return (
     <div className="px-12 py-10 max-w-7xl">
       <BackLink showId={show.id} />
@@ -142,6 +162,17 @@ export default async function DealReviewPage({
           currentEmailText={deal.agentEmailText}
         />
       </div>
+
+      {/* Agent's response — shown when the agent has acted */}
+      {agentResponses.length > 0 && (
+        <AgentResponseSection
+          confirmedItemsCount={confirmedItemsCount}
+          flaggedResponses={flaggedResponses}
+          readingChoices={readingChoices}
+          agentConfirmedAt={deal.agentConfirmedAt}
+          extraction={extraction}
+        />
+      )}
 
       {extraction ? (
         <ExtractionView
@@ -198,6 +229,163 @@ function AgentContextBanner({
       </div>
     </div>
   );
+}
+
+type AgentResponseRow = {
+  id: string;
+  dealId: string;
+  fieldPath: string;
+  action: "confirmed" | "flagged" | "reading_chosen";
+  detailsJson: string | null;
+  respondedAt: Date;
+};
+
+function AgentResponseSection({
+  confirmedItemsCount,
+  flaggedResponses,
+  readingChoices,
+  agentConfirmedAt,
+  extraction,
+}: {
+  confirmedItemsCount: number;
+  flaggedResponses: AgentResponseRow[];
+  readingChoices: AgentResponseRow[];
+  agentConfirmedAt: Date | null;
+  extraction: ExtractionOutput | null;
+}) {
+  const hasFlags = flaggedResponses.length > 0;
+
+  return (
+    <div className="mb-8">
+      <Card accent={hasFlags ? "amber" : "brand"}>
+        <CardHeader>
+          <div>
+            <CardTitle className={hasFlags ? "text-amber-900" : "text-brand-800"}>
+              Agent response
+              {agentConfirmedAt
+                ? ` — submitted ${fmtRelative(agentConfirmedAt)}`
+                : " — in progress"}
+            </CardTitle>
+            <CardDescription>
+              {hasFlags
+                ? `${flaggedResponses.length} item${flaggedResponses.length === 1 ? "" : "s"} flagged for your review · ${confirmedItemsCount} confirmed${readingChoices.length > 0 ? ` · ${readingChoices.length} ambiguity reading${readingChoices.length === 1 ? "" : "s"} chosen` : ""}.`
+                : `${confirmedItemsCount} items confirmed${readingChoices.length > 0 ? ` · ${readingChoices.length} ambiguity reading${readingChoices.length === 1 ? "" : "s"} chosen` : ""}. No flags raised.`}
+            </CardDescription>
+          </div>
+          {hasFlags ? (
+            <AlertCircle className="h-4 w-4 text-amber-700 shrink-0" />
+          ) : (
+            <Check className="h-4 w-4 text-brand-700 shrink-0" />
+          )}
+        </CardHeader>
+        {(hasFlags || readingChoices.length > 0) && (
+          <CardContent className="space-y-4">
+            {hasFlags && (
+              <div>
+                <div className="eyebrow text-[10px] text-amber-800 mb-2.5">
+                  Flagged items — needs your action
+                </div>
+                <ul className="space-y-3">
+                  {flaggedResponses.map((r) => (
+                    <li
+                      key={r.id}
+                      className="rounded-md border border-amber-200 bg-amber-50/40 p-3.5"
+                    >
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <code className="text-[11px] font-mono text-amber-900 bg-amber-100/80 px-1.5 py-0.5 rounded">
+                          {humanizeFieldPath(r.fieldPath, extraction)}
+                        </code>
+                        <span className="text-[11px] text-ink-500">
+                          {fmtRelative(r.respondedAt)}
+                        </span>
+                      </div>
+                      {extractDetail(r.detailsJson, "comment") && (
+                        <div className="text-[12.5px] text-ink-800 italic mt-1">
+                          &ldquo;{extractDetail(r.detailsJson, "comment")}&rdquo;
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {readingChoices.length > 0 && (
+              <div>
+                <div className="eyebrow text-[10px] text-brand-800 mb-2.5">
+                  Ambiguity readings chosen
+                </div>
+                <ul className="space-y-2">
+                  {readingChoices.map((r) => {
+                    const idx = extractDetail(r.detailsJson, "reading_index");
+                    const custom = extractDetail(r.detailsJson, "custom_reading");
+                    return (
+                      <li
+                        key={r.id}
+                        className="text-[12.5px] text-ink-800 flex items-baseline gap-2"
+                      >
+                        <code className="text-[11px] font-mono text-ink-700 bg-ink-100/80 px-1.5 py-0.5 rounded">
+                          {humanizeFieldPath(r.fieldPath, extraction)}
+                        </code>
+                        {custom ? (
+                          <span className="italic">custom: &ldquo;{custom}&rdquo;</span>
+                        ) : idx != null ? (
+                          <span>Reading {Number(idx) + 1}</span>
+                        ) : (
+                          <span className="text-ink-400">(no detail)</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function humanizeFieldPath(
+  fieldPath: string,
+  extraction: ExtractionOutput | null,
+): string {
+  // Map the synthetic field paths from the agent UI back to human labels.
+  if (fieldPath === "deal_kind") return "Deal type";
+  if (fieldPath === "guarantee_amount") return "Guarantee";
+  if (fieldPath === "percentage") return "Percentage";
+  if (fieldPath === "expense_cap") return "Expense cap";
+  if (fieldPath === "hospitality_cap") return "Hospitality cap";
+  if (fieldPath === "all") return "Full deal";
+  const m = fieldPath.match(/^(bonus|ratchet|walkout|recoup|ambiguity|discrepancy)_(\d+)$/);
+  if (m && extraction) {
+    const kind = m[1];
+    const idx = Number(m[2]);
+    if (kind === "bonus" && extraction.extracted?.bonuses?.[idx]) {
+      return `Bonus: ${extraction.extracted.bonuses[idx].label}`;
+    }
+    if (kind === "recoup" && extraction.extracted?.planned_recoups?.[idx]) {
+      const r = extraction.extracted.planned_recoups[idx];
+      return `Recoup: ${r.category} $${r.amount}`;
+    }
+    if (kind === "ambiguity" && extraction.ambiguity_flags?.[idx]) {
+      const f = extraction.ambiguity_flags[idx];
+      const snippet = f.clause.length > 50 ? f.clause.slice(0, 47) + "…" : f.clause;
+      return `Ambiguity: "${snippet}"`;
+    }
+  }
+  return fieldPath;
+}
+
+function extractDetail(json: string | null, key: string): string | null {
+  if (!json) return null;
+  try {
+    const o = JSON.parse(json);
+    const v = o?.[key];
+    return v == null ? null : String(v);
+  } catch {
+    return null;
+  }
 }
 
 function StatusRow({
