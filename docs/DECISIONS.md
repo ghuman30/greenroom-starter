@@ -58,3 +58,17 @@ Non-obvious choices made during the build, with reasoning. So a smart reader who
   - `AmbiguityCard` guards `flag.readings ?? []` and returns null on empty (LLM occasionally omits).
 - **Reviewer P1 fixes applied:** `AmbiguityResolver` state replaced `number | null | -1` overload with explicit discriminated union `{kind: "none" | "index" | "custom"}`; `details` payload typed as `ResponseDetails` discriminated union and sanitized at boundary (clamps custom text to 2000 chars); `getAgentLink` derives base URL from request headers (works on localhost AND deployed previews).
 - **Nice-to-have fixes:** anchored sidebar path matching (`/deal` exact or `/deal/...`, not `/dealings`); `findActiveTokenForDeal` filters in SQL with `and(isNull, gt, eq)` instead of in-memory; documented timing-attack non-risk on `resolveToken`.
+
+### T4 (2026-05-23)
+
+- **Pre-flight bypasses lib/queries.ts intentionally.** The shipped `getAllShows` / `getReports` filter to past shows only (the D18 bug). Pre-flight needs the *un-filtered* view — that's its whole reason for existing. New `lib/preFlightQueries.ts` does direct Drizzle queries; this is explicit and documented inline.
+- **8 signals locked.** (i) ambiguous prose [LLM], (ii.pred) recoup risk, (iii.pred) hosp overrun, (iv) ignored structure, (v) open-loop notes, (vi) not agent-confirmed, (vii) agent posture modifier (multiplies severity), (ix) new agent badge. Signal (viii) is dropped (Q13).
+- **Agent posture modifier reads `preferences_notes`** and classifies as "elevated" (Tom Neary, Daniel Hwang pattern: "pushes back hard", "tends to ambiguity"), "low" (Danny Ortiz, Sarah Kim pattern: "easygoing", "quick to sign"), or "neutral". Scales severity ±1 step on each firing signal.
+- **Risk score = sum of severity weights (low=1, medium=2, high=3) after posture modifier.** Excludes (ix) since it's informational only.
+- **Q14 backtest result: LLM signal (i) matches regex recall (10/24) while trimming 2 false positives** at current 2% extraction coverage. Memo discloses honestly: full-corpus extraction (production state) projects toward eval-measured 100% ambiguity recall; we don't claim a recall lift we haven't measured.
+- **Reviewer fixes (4 P0/P1 + 2 minor):**
+  - SQL `__null__` sentinel replaced with conditional OR-branches (would have silently inflated priorSettlements on null-id rows).
+  - `lte` → `lt` on prior-settlements date filter (excludes self; "prior" means strictly before).
+  - `JSON.parse + as ExtractionOutput` replaced with `getExtraction()` (same shape-guarded loader Mariana review uses).
+  - `RECOUP_WORDS` tightened from a 11-entry wide list to 8 specific phrases (was suppressing signal (ii) on routine prose containing "rider" / "production" / "advance").
+  - `key={s.id}` instead of array index, `SUMMARY_COLORS` lifted to module scope.
