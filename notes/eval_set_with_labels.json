@@ -1,0 +1,487 @@
+{
+  "meta": {
+    "purpose": "Hand-labeled eval set for the LLM deal extractor (slice 1).",
+    "labeled_by": "Claude (assisted) — to be spot-checked by Arshdeep before T1 begins",
+    "labeled_at": "2026-05-23",
+    "spec": {
+      "input.email_text": "Optional. Verbatim agent email text. For Coastal Spell, reconstructed from snippets in data/dispute-thread.md. For all others, null (we don't have email data in the corpus).",
+      "input.notes_text": "Mariana's deal_notes_freetext from the DB.",
+      "input.structured_fields_context": "Existing structured columns Mariana entered (for cross-reference; the extractor sees these as 'previously entered'). Allows the LLM to flag stale-structured-field drift.",
+      "expected.extracted": "Ground-truth structured extraction.",
+      "expected.ambiguity_flags_must_contain": "Clauses the LLM MUST flag (substring match on clause + min severity).",
+      "expected.ambiguity_flags_must_not_contain_substrings": "For clean baselines: clauses that must NOT be flagged (precision check).",
+      "expected.discrepancies_must_contain": "For cases with both email and notes: discrepancies the LLM MUST flag.",
+      "expected.low_confidence_fields": "Fields the LLM should declare uncertain rather than fabricate.",
+      "expected.planned_recoups_must_contain": "Recoup line items the LLM must identify."
+    },
+    "scoring": {
+      "field_accuracy_target": 0.85,
+      "ambiguity_recall_target": 0.70,
+      "discrepancy_recall_target": 1.00,
+      "ambiguity_precision_target_on_clean_cases": 0.90
+    }
+  },
+  "cases": [
+    {
+      "show_id": "show_coastal_spell_dispute",
+      "label": "Coastal Spell 2025-03-14 — brief's canonical dispute. Has BOTH email (reconstructed from data/dispute-thread.md) AND Mariana's notes. Tests email-as-primary-source + discrepancy detection + ambiguity on marketing recoup wording.",
+      "tags": ["hero", "marketing_recoup_ambiguity", "has_email", "demo_case"],
+      "input": {
+        "email_text": "From: Andrea Pelletier <apelletier@wme.com>\nTo: Mariana Reyes <mariana@thecrescentnashville.com>\nDate: December 12, 2024\nSubject: Coastal Spell — March 14 offer\n\nHi Mariana,\n\nConfirming our offer for Coastal Spell on March 14:\n\n$5,000 vs 80% of net after expenses, whichever greater. Expenses capped at $2,500, marketing recoup of $900 against gross. Standard hospitality cap. Bonus of $1,000 if gross exceeds $25k.\n\nWe're excited to route this through The Crescent. Let me know if anything needs adjustment.\n\nBest,\nAndrea\n\n[NOTE: Email text reconstructed from snippets quoted in data/dispute-thread.md. Original email is referenced but not preserved verbatim in the corpus.]",
+        "notes_text": "$5,000 vs 80% of net after expenses, whichever greater. Expenses capped $2,500. Hospitality cap $500. +$1,000 bonus over $25k gross. Marketing recoup of $900 against gross. (Note added 3/19/25: this deal email was ambiguous — recoup interpretation disputed by WME, resolved with $720 concession.)",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 5000.0,
+          "percentage": 0.8,
+          "percentage_basis": "net",
+          "expense_cap": 2500.0,
+          "hospitality_cap": 500.0,
+          "bonuses_json": [
+            {"type": "gross_threshold", "label": "+$1,000 if gross > $25,000", "threshold": 25000, "amount": 1000, "stacks": false}
+          ]
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 5000,
+          "percentage": 0.80,
+          "percentage_basis": "net",
+          "expense_cap": 2500,
+          "hospitality_cap": 500,
+          "bonuses_must_contain": [
+            {"type": "gross_threshold", "threshold": 25000, "amount": 1000}
+          ],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups_must_contain": [
+            {"category": "marketing", "amount": 900, "basis_must_be": "unspecified"}
+          ]
+        },
+        "ambiguity_flags_must_contain": [
+          {
+            "clause_substring": "marketing recoup of $900 against gross",
+            "min_severity": "high",
+            "readings_should_describe_both": ["inside expense cap", "outside / separate from expense cap"],
+            "rationale": "This is THE canonical case. The phrasing admits two readings. LLM MUST flag and present both with $ delta."
+          }
+        ],
+        "discrepancies_must_contain": [
+          {
+            "field_substring": "hospitality_cap",
+            "rationale": "Email mentions 'standard hospitality cap' but doesn't specify $500. Notes specify $500. LLM should flag this as needing clarification — OR extract it as 'unspecified in email' with low confidence."
+          }
+        ],
+        "low_confidence_fields": []
+      }
+    },
+    {
+      "show_id": "show_0007",
+      "label": "Briar Road 2024-10-16 — second hero case (D9). Prose contains the canonical 'structured field still reflects original $11,000 — confirm before settlement' amendment-in-notes. Vs deal with walkout pot. Disputed on production_overage, not marketing.",
+      "tags": ["hero", "amendment_in_prose", "walkout_pot", "stale_structured_field"],
+      "input": {
+        "email_text": null,
+        "notes_text": "$2,631 vs 90% net + walkout pot. After breakeven on guarantee + expenses, all incremental gross goes to artist. Hospitality cap $400. +$400 if gross > $11,000; Walkout pot: 100% of gross above $3,200. [Updated 4 days before show via phone call with agent: bonus threshold dropped to $6,000. Note: structured field still reflects original $11,000 — confirm before settlement.]",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 2631.0,
+          "percentage": 0.9,
+          "percentage_basis": "net",
+          "expense_cap": 1300.0,
+          "hospitality_cap": 400.0,
+          "bonuses_json": [
+            {"type": "gross_threshold", "label": "+$400 if gross > $11,000", "threshold": 11000, "amount": 400, "stacks": true},
+            {"type": "gross_threshold", "label": "Walkout pot: 100% of gross above $3,200", "threshold": 3200, "amount": 1316, "stacks": true}
+          ]
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 2631,
+          "percentage": 0.90,
+          "percentage_basis": "net",
+          "expense_cap_must_not_be_null": true,
+          "hospitality_cap": 400,
+          "bonuses_must_contain": [
+            {"type": "gross_threshold", "threshold_should_be_6000_not_11000": true, "amount": 400, "rationale": "The PROSE has an amendment note: threshold dropped from $11,000 to $6,000. LLM must extract the AMENDED value, not the stale structured value."}
+          ],
+          "ratchets": [],
+          "walkout_pots_must_contain": [
+            {"percent": 1.00, "threshold": 3200, "basis": "gross"}
+          ],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_must_contain": [
+          {
+            "clause_substring": "structured field still reflects original $11,000",
+            "min_severity": "high",
+            "rationale": "Mariana flagged this herself in prose. Extractor must surface this as a discrepancy or warning."
+          }
+        ],
+        "discrepancies_must_contain": [
+          {
+            "field_substring": "threshold",
+            "rationale": "Notes say threshold was amended to $6k via phone call; structured field is still $11k. Extractor must flag this as needs-resolution. Match 'threshold' substring — covers 'bonuses.gross_threshold.threshold', 'bonus_threshold', etc."
+          }
+        ]
+      }
+    },
+    {
+      "show_id": "show_0001",
+      "label": "Wet Cement 2026-06-17 — paid-but-disputed-recoup (D8 bidirectional drift). Has amendment hint ('renegotiated up'). Settlement has two recoups — one is misfiled as production_overage but the LABEL says 'Spotify ad spend' (marketing). Tests that the extractor doesn't fabricate planned recoups for a deal that doesn't mention them.",
+      "tags": ["amendment_hint", "no_planned_recoups", "drift_case"],
+      "input": {
+        "email_text": null,
+        "notes_text": "$3,500 guarantee vs 85% of net after expenses, whichever greater. Renegotiated up from %-only deal three weeks before show — agent insisted on a floor. Expense cap $550, hospitality $300.",
+        "structured_fields_context": {
+          "deal_type": "percentage_of_net",
+          "guarantee_amount": 3500.0,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 550.0,
+          "hospitality_cap": 300.0,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 3500,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 550,
+          "hospitality_cap": 300,
+          "bonuses": [],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": [],
+          "rationale_on_deal_kind": "Deal says 'guarantee vs 85% of net... whichever greater' — that's a vs deal, NOT percentage_of_net. Structured field says percentage_of_net, but prose is unambiguous. Extractor should pick vs."
+        },
+        "ambiguity_flags_must_not_contain_substrings": [
+          "$550 expense cap",
+          "$300 hospitality"
+        ],
+        "discrepancies_must_contain": [
+          {
+            "field_substring": "deal_kind",
+            "rationale": "Structured field 'percentage_of_net' contradicts prose 'vs ... whichever greater'. Extractor must flag."
+          }
+        ],
+        "low_confidence_fields": [],
+        "must_NOT_invent_recoups": true
+      }
+    },
+    {
+      "show_id": "show_0038",
+      "label": "Sunday Drivers 2026-07-01 — HIDDEN FUTURE DISPUTE. Demo case for Loom. Paradigm + vs deal + tier_ratchet that engine ignores. Critical that LLM extracts the ratchet correctly so pre-flight signal (iv) fires properly.",
+      "tags": ["demo_case", "hidden_future_dispute", "tier_ratchet", "paradigm"],
+      "input": {
+        "email_text": null,
+        "notes_text": "1,446 g'tee with escalator: 85% net at base, ratchets to 95% over 80% capacity. Expenses to 700. Ratchet: 85% to 95% over 80% sold.",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 1446.0,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 700.0,
+          "hospitality_cap": 500.0,
+          "bonuses_json": [
+            {"type": "tier_ratchet", "label": "Ratchet: 85% to 95% over 80% sold", "tiers": [{"from": 0, "to": 0.8, "percentage": 0.85}, {"from": 0.8, "to": null, "percentage": 0.95}]}
+          ]
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 1446,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 700,
+          "hospitality_cap_should_be_present_or_null": "Notes don't mention hosp cap, but structured has $500. Either extract $500 (using structured context) or null (and flag low_confidence).",
+          "bonuses": [],
+          "ratchets_must_contain": [
+            {"trigger": "attendance_pct", "from_pct": 0.85, "to_pct": 0.95, "threshold": 0.80}
+          ],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_must_not_contain_substrings": ["ratchet"],
+        "rationale": "The ratchet is clearly stated. NOT ambiguous. Extractor must capture the structure cleanly."
+      }
+    },
+    {
+      "show_id": "show_0159",
+      "label": "House of Lights 2026-06-10 — HIDDEN FUTURE DISPUTE. Demo case for Loom. Flat deal where settlement has a marketing recoup that prose doesn't mention. Tests signal (ii.pred) silent-recoup prediction.",
+      "tags": ["demo_case", "hidden_future_dispute", "silent_recoup", "flat_with_recoup_oddity"],
+      "input": {
+        "email_text": null,
+        "notes_text": "Flat $1,292. No upside.",
+        "structured_fields_context": {
+          "deal_type": "flat",
+          "guarantee_amount": 1292.0,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "flat",
+          "guarantee_amount": 1292,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses": [],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_should_be_empty": true,
+        "rationale": "Deal prose is clean and simple. LLM should NOT invent recoups. The fact that this show disputes later (due to marketing recoup added at settlement) is detected by signal (ii.pred) using history, NOT by the extractor inventing recoups."
+      }
+    },
+    {
+      "show_id": "show_0003",
+      "label": "Pen Pal 2025-04-19 — CLEAN FLAT BASELINE. No bonus, no recoup, no ambiguity. Tests that the extractor doesn't over-flag clean deals (precision).",
+      "tags": ["baseline", "clean_flat", "precision_test"],
+      "input": {
+        "email_text": null,
+        "notes_text": "Flat $1,016. No upside.",
+        "structured_fields_context": {
+          "deal_type": "flat",
+          "guarantee_amount": 1016.0,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "flat",
+          "guarantee_amount": 1016,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses": [],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_should_be_empty": true,
+        "discrepancies_should_be_empty": true,
+        "low_confidence_fields_should_be_empty": true
+      }
+    },
+    {
+      "show_id": "show_0059",
+      "label": "Freight Class 2025-08-20 — CLEAN % OF GROSS BASELINE with sellout bonus. Tests that 'Sellout bonus per the email' is captured even without explicit amount in prose.",
+      "tags": ["baseline", "percentage_of_gross", "sellout_bonus"],
+      "input": {
+        "email_text": null,
+        "notes_text": "70% of gross. No expense deductions. Simple split deal. Sellout bonus per the email.",
+        "structured_fields_context": {
+          "deal_type": "percentage_of_gross",
+          "guarantee_amount": null,
+          "percentage": 0.7,
+          "percentage_basis": "gross",
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses_json": [{"type": "sellout", "label": "+$200 on sellout", "amount": 200}]
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "percentage_of_gross",
+          "guarantee_amount": null,
+          "percentage": 0.70,
+          "percentage_basis": "gross",
+          "expense_cap": null,
+          "hospitality_cap": null,
+          "bonuses_must_contain": [
+            {"type": "sellout", "amount_present_via_structured_context_OR_low_confidence": "200 from structured context, OR null with low_confidence note that prose says 'per the email' without value"}
+          ],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "low_confidence_fields_acceptable": [
+          {"field": "sellout_bonus.amount", "reason": "Prose says 'per the email' without specifying amount; structured field has $200 but extractor may or may not pull from structured context"}
+        ]
+      }
+    },
+    {
+      "show_id": "show_0014",
+      "label": "Jenny Hardwick 2026-02-10 — VS-NET WITH TIER RATCHET. Tests ratchet extraction. Paid (no dispute). Wasserman.",
+      "tags": ["baseline", "vs_with_ratchet"],
+      "input": {
+        "email_text": null,
+        "notes_text": "7,138 g'tee with escalator: 70% net at base, ratchets to 80% over 80% capacity. Expenses to 3550.",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 7138.0,
+          "percentage": 0.7,
+          "percentage_basis": "net",
+          "expense_cap": 3550.0,
+          "hospitality_cap": 300.0,
+          "bonuses_json": [
+            {"type": "tier_ratchet", "label": "Ratchet: 70% to 80% over 80% sold", "tiers": [{"from": 0, "to": 0.8, "percentage": 0.7}, {"from": 0.8, "to": null, "percentage": 0.8}]}
+          ]
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 7138,
+          "percentage": 0.70,
+          "percentage_basis": "net",
+          "expense_cap": 3550,
+          "hospitality_cap_acceptable": [null, 300],
+          "ratchets_must_contain": [
+            {"trigger": "attendance_pct", "from_pct": 0.70, "to_pct": 0.80, "threshold": 0.80}
+          ]
+        },
+        "ambiguity_flags_should_be_empty": true
+      }
+    },
+    {
+      "show_id": "show_0013",
+      "label": "Radio Tower 2025-05-23 — VS-GROSS VARIANT (not vs-net). Tests basis extraction. Mentions 'performance bonuses per the deal memo' — tests low_confidence on unspecified bonus structure.",
+      "tags": ["baseline", "vs_gross", "low_confidence_bonus"],
+      "input": {
+        "email_text": null,
+        "notes_text": "1,868 g'tee vs 85% gross — no expenses come out. Simpler math, riskier for venue. Hosp $500. Performance bonuses per the deal memo (see email thread).",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 1868.0,
+          "percentage": 0.85,
+          "percentage_basis": "gross",
+          "expense_cap": null,
+          "hospitality_cap": 500.0,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 1868,
+          "percentage": 0.85,
+          "percentage_basis": "gross",
+          "expense_cap": null,
+          "hospitality_cap": 500,
+          "bonuses": [],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "low_confidence_fields_must_contain": [
+          {"field_substring": "bonus", "reason": "Prose references 'performance bonuses per the deal memo (see email thread)' but doesn't specify structure or amounts. LLM must declare low_confidence rather than fabricate."}
+        ]
+      }
+    },
+    {
+      "show_id": "show_0018",
+      "label": "Navarro 2025-01-21 — DOOR DEAL. Tests door deal extraction. Has a marketing recoup at settlement (agreed) that prose doesn't mention.",
+      "tags": ["baseline", "door_deal"],
+      "input": {
+        "email_text": null,
+        "notes_text": "Door deal. Artist gets ticket revenue minus expenses (capped $1050). DIY/experimental tour.",
+        "structured_fields_context": {
+          "deal_type": "door",
+          "guarantee_amount": null,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": 1050.0,
+          "hospitality_cap": 200.0,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "door",
+          "guarantee_amount": null,
+          "percentage": null,
+          "percentage_basis": null,
+          "expense_cap": 1050,
+          "hospitality_cap_acceptable": [null, 200],
+          "bonuses": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_should_be_empty": true,
+        "rationale": "Door deal is well-modeled in prose. LLM should not invent recoups even though settlement later has one."
+      }
+    },
+    {
+      "show_id": "show_0322",
+      "label": "Mariner's Wake 2025-06-18 — WME DISPUTE (Daniel Hwang). Daniel's preferences_notes flag 'tends to ambiguity in deal emails.' Deal is % of net, no guarantee. Settlement has marketing recoup. Tests pre-flight severity weighting via agent context.",
+      "tags": ["wme_dispute", "agent_ambiguity_modifier", "percentage_of_net"],
+      "input": {
+        "email_text": null,
+        "notes_text": "85% of net after expenses. Expenses capped $3200. No guarantee.",
+        "structured_fields_context": {
+          "deal_type": "percentage_of_net",
+          "guarantee_amount": null,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 3200.0,
+          "hospitality_cap": 500.0,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "percentage_of_net",
+          "guarantee_amount": null,
+          "percentage": 0.85,
+          "percentage_basis": "net",
+          "expense_cap": 3200,
+          "hospitality_cap_acceptable": [null, 500],
+          "bonuses": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_should_be_empty": true,
+        "rationale": "The prose itself is unambiguous. The DISPUTE is caused by silent-recoup pattern (signal ii.pred + agent context: Daniel pushes back hard per preferences_notes). Extractor should NOT flag the prose; the pre-flight uses contextual signals."
+      }
+    },
+    {
+      "show_id": "show_0268",
+      "label": "Rookie Dive 2026-03-25 — TOM NEARY CASE (Wasserman). Vs deal. Settlement finalized with both hospitality_overage (disputed) and production_overage (agreed). Tom's preferences_notes flag 'his own template he wants filled in.' Tests vs extraction + pre-flight context for high-friction agent.",
+      "tags": ["tom_neary", "vs_simple", "post_show_recoups"],
+      "input": {
+        "email_text": null,
+        "notes_text": "1,526 g'tee vs 70% of net. Expenses to 750. Hospitality $300.",
+        "structured_fields_context": {
+          "deal_type": "vs",
+          "guarantee_amount": 1526.0,
+          "percentage": 0.7,
+          "percentage_basis": "net",
+          "expense_cap": 750.0,
+          "hospitality_cap": 300.0,
+          "bonuses_json": null
+        }
+      },
+      "expected": {
+        "extracted": {
+          "deal_kind": "vs",
+          "guarantee_amount": 1526,
+          "percentage": 0.70,
+          "percentage_basis": "net",
+          "expense_cap": 750,
+          "hospitality_cap": 300,
+          "bonuses": [],
+          "ratchets": [],
+          "walkout_pots": [],
+          "planned_recoups": []
+        },
+        "ambiguity_flags_should_be_empty": true,
+        "rationale": "Clean simple vs deal in prose. The disputes that happen later (hospitality_overage, production_overage) are post-show events, not deal-prose ambiguity. Extractor should be clean; pre-flight surfaces via Tom Neary's high-friction history (signals vii + agent severity modifier)."
+      }
+    }
+  ]
+}
